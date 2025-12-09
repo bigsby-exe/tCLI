@@ -52,6 +52,7 @@ class TodoRead(BaseModel):
         default=3, ge=1, le=5, description="Priority level (1=highest, 5=lowest)"
     )
     tags: Optional[list[str]] = Field(None, description="List of tags for categorizing the todo")
+    status: Optional[str] = Field(None, description="Status of the todo (e.g., 'todo', 'in_progress', 'done')")
     created_at: datetime = Field(..., description="Timestamp when the todo was created")
     updated_at: Optional[datetime] = Field(None, description="Timestamp when the todo was last updated")
 
