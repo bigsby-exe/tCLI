@@ -119,15 +119,17 @@ def _calculate_fuzzy_score(search_term: str, title: str) -> float:
         if word_match_ratio > 0.5:
             return 50.0 + (word_match_ratio - 0.5) * 40.0
     
-    # Character-based similarity (simple ratio)
-    # Count common characters
-    search_chars = set(search_lower)
-    title_chars = set(title_lower)
+    # Character-based similarity (only as last resort, with strict threshold)
+    # Ignore spaces and count unique characters
+    search_chars = set(search_lower.replace(" ", ""))
+    title_chars = set(title_lower.replace(" ", ""))
     common_chars = search_chars & title_chars
     
-    if search_chars:
+    if search_chars and len(search_chars) >= 3:  # Only use for longer search terms
         char_ratio = len(common_chars) / len(search_chars)
-        return char_ratio * 40.0
+        # Require at least 70% character match to get any score
+        if char_ratio >= 0.7:
+            return char_ratio * 40.0
     
     return 0.0
 
@@ -170,8 +172,10 @@ def _resolve_task_identifier(
         for todo in all_todos
     ]
     
-    # Filter out todos with score 0 and sort by score (descending)
-    scored_todos = [(todo, score) for todo, score in scored_todos if score > 0]
+    # Filter out todos with low scores and sort by score (descending)
+    # Only show matches with score >= 25.0 to avoid too many false positives
+    MIN_SCORE_THRESHOLD = 25.0
+    scored_todos = [(todo, score) for todo, score in scored_todos if score >= MIN_SCORE_THRESHOLD]
     scored_todos.sort(key=lambda x: x[1], reverse=True)
     
     if not scored_todos:
