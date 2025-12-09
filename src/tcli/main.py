@@ -182,7 +182,7 @@ def list(
             if status is None:
                 todos = client.list_todos(q=q, tag=tag, status=None, limit=limit)
                 # Filter out todos with status "done"
-                todos = [todo for todo in todos if getattr(todo, "status", "").lower() != "done"]
+                todos = [todo for todo in todos if (getattr(todo, "status") or "").lower() != "done"]
             else:
                 todos = client.list_todos(q=q, tag=tag, status=status, limit=limit)
             
@@ -409,7 +409,7 @@ def main():
             with get_client(None) as client:
                 todos = client.list_todos(q=None, tag=None, status=None, limit=None)
                 # Filter out todos with status "done"
-                todos = [todo for todo in todos if getattr(todo, "status", "").lower() != "done"]
+                todos = [todo for todo in todos if (getattr(todo, "status") or "").lower() != "done"]
                 
                 if not todos:
                     console.print("[yellow]No todos found.[/yellow]")
