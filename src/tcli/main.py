@@ -11,7 +11,7 @@ from rich.console import Console
 
 from tcli.api import APIError, APIClient
 from tcli.config import Config
-from tcli.models import TodoCreate, TodoUpdate
+from tcli.models import TodoCreate, TodoRead, TodoUpdate
 from tcli.output import print_json, print_todo_detail, print_todo_table
 
 app = typer.Typer(help="CLI tool for managing todos via the Todo API")
@@ -81,6 +81,161 @@ def get_client(config_path: Optional[Path] = None) -> APIClient:
     except ValueError as e:
         console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
+
+
+def _calculate_fuzzy_score(search_term: str, title: str) -> float:
+    """
+    Calculate a fuzzy matching score between search term and title.
+    Returns a score from 0.0 to 100.0, with higher scores indicating better matches.
+    """
+    search_lower = search_term.lower().strip()
+    title_lower = title.lower().strip()
+    
+    # Exact match (case-insensitive)
+    if search_lower == title_lower:
+        return 100.0
+    
+    # Starts with match
+    if title_lower.startswith(search_lower):
+        return 90.0
+    
+    # Contains match
+    if search_lower in title_lower:
+        return 80.0
+    
+    # Word-based matching: check if all words in search appear in title
+    search_words = [w for w in search_lower.split() if w]
+    title_words = [w for w in title_lower.split() if w]
+    
+    if search_words:
+        matching_words = sum(1 for word in search_words if word in title_words)
+        word_match_ratio = matching_words / len(search_words)
+        
+        # If all words match, give high score
+        if word_match_ratio == 1.0:
+            return 70.0
+        
+        # Partial word match
+        if word_match_ratio > 0.5:
+            return 50.0 + (word_match_ratio - 0.5) * 40.0
+    
+    # Character-based similarity (simple ratio)
+    # Count common characters
+    search_chars = set(search_lower)
+    title_chars = set(title_lower)
+    common_chars = search_chars & title_chars
+    
+    if search_chars:
+        char_ratio = len(common_chars) / len(search_chars)
+        return char_ratio * 40.0
+    
+    return 0.0
+
+
+def _resolve_task_identifier(
+    identifier: str,
+    client: APIClient,
+) -> TodoRead:
+    """
+    Resolve a task identifier (UUID or name) to a TodoRead object.
+    
+    Supports:
+    - UUID: Direct lookup by ID
+    - Name: Fuzzy matching against all todos
+    
+    When multiple tasks match a name, displays them and prompts for selection.
+    """
+    # Try to parse as UUID first
+    try:
+        todo_id = UUID(identifier)
+        return client.get_todo(todo_id)
+    except ValueError:
+        # Not a UUID, treat as name and do fuzzy matching
+        pass
+    
+    # Fetch all todos for fuzzy matching
+    try:
+        all_todos = client.list_todos(q=None, tag=None, status=None, limit=1000)
+    except APIError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+    
+    if not all_todos:
+        console.print(f"[red]Error:[/red] No todos found in the system.")
+        sys.exit(1)
+    
+    # Calculate fuzzy scores for all todos
+    scored_todos = [
+        (todo, _calculate_fuzzy_score(identifier, todo.title))
+        for todo in all_todos
+    ]
+    
+    # Filter out todos with score 0 and sort by score (descending)
+    scored_todos = [(todo, score) for todo, score in scored_todos if score > 0]
+    scored_todos.sort(key=lambda x: x[1], reverse=True)
+    
+    if not scored_todos:
+        console.print(f"[red]Error:[/red] No todos found matching '{identifier}'")
+        sys.exit(1)
+    
+    # If only one match, return it
+    if len(scored_todos) == 1:
+        return scored_todos[0][0]
+    
+    # Multiple matches - show table and prompt for selection
+    matching_todos = [todo for todo, score in scored_todos]
+    console.print(f"\n[yellow]Multiple tasks found matching '{identifier}':[/yellow]")
+    print_todo_table(matching_todos)
+    
+    # Prompt for selection
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        try:
+            selection = typer.prompt(
+                f"\nEnter the task ID or index (1-{len(matching_todos)}) to select",
+                default="",
+            ).strip()
+            
+            if not selection:
+                console.print("[red]Error:[/red] Selection cannot be empty.")
+                continue
+            
+            # Try to parse as UUID
+            try:
+                selected_id = UUID(selection)
+                # Find matching todo by ID
+                for todo in matching_todos:
+                    if todo.id == selected_id:
+                        return todo
+                console.print(f"[red]Error:[/red] Task with ID {selection} not found in the matches above.")
+                continue
+            except ValueError:
+                # Not a UUID, try as index
+                pass
+            
+            # Try to parse as index
+            try:
+                index = int(selection)
+                if 1 <= index <= len(matching_todos):
+                    return matching_todos[index - 1]
+                else:
+                    console.print(
+                        f"[red]Error:[/red] Index must be between 1 and {len(matching_todos)}"
+                    )
+                    continue
+            except ValueError:
+                console.print(
+                    "[red]Error:[/red] Invalid input. Enter a valid UUID or index number."
+                )
+                continue
+                
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[yellow]Selection cancelled.[/yellow]")
+            sys.exit(1)
+    
+    # If we get here, max attempts reached
+    console.print(f"[red]Error:[/red] Maximum selection attempts reached.")
+    sys.exit(1)
 
 
 def _create_todo(
@@ -287,7 +442,7 @@ def update(
 
 @app.command()
 def edit(
-    item_id: str = typer.Argument(..., help="Todo ID (UUID)"),
+    item_id: str = typer.Argument(..., help="Todo ID (UUID) or name (supports fuzzy matching)"),
     title: Optional[str] = typer.Option(None, "--title", "-t", help="Title of the todo"),
     description: Optional[str] = typer.Option(None, "--description", "-d", help="Description of the todo"),
     due_at: Optional[str] = typer.Option(None, "--due-at", help="Due date (supports: YYYY-MM-DD, YYYY-MM-DDTHH:MM:SS, MM/DD/YYYY)"),
@@ -299,12 +454,6 @@ def edit(
     config_path: Optional[Path] = typer.Option(None, "--config", help="Path to config file"),
 ):
     """Edit a todo item (alias for update)."""
-    try:
-        todo_id = UUID(item_id)
-    except ValueError:
-        console.print(f"[red]Error:[/red] Invalid UUID format: {item_id}")
-        sys.exit(1)
-
     # Parse tags
     tag_list = None
     if tags is not None:
@@ -336,7 +485,9 @@ def edit(
 
     try:
         with get_client(config_path) as client:
-            todo = client.update_todo(todo_id, todo_update)
+            # Resolve task identifier (UUID or name with fuzzy matching)
+            todo = _resolve_task_identifier(item_id, client)
+            todo = client.update_todo(todo.id, todo_update)
             if json_output:
                 print_json(todo)
             else:
@@ -349,22 +500,18 @@ def edit(
 
 @app.command()
 def done(
-    item_id: str = typer.Argument(..., help="Todo ID (UUID)"),
+    item_id: str = typer.Argument(..., help="Todo ID (UUID) or name (supports fuzzy matching)"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
     config_path: Optional[Path] = typer.Option(None, "--config", help="Path to config file"),
 ):
     """Mark a todo as done."""
-    try:
-        todo_id = UUID(item_id)
-    except ValueError:
-        console.print(f"[red]Error:[/red] Invalid UUID format: {item_id}")
-        sys.exit(1)
-
     todo_update = TodoUpdate(status="done")
 
     try:
         with get_client(config_path) as client:
-            todo = client.update_todo(todo_id, todo_update)
+            # Resolve task identifier (UUID or name with fuzzy matching)
+            todo = _resolve_task_identifier(item_id, client)
+            todo = client.update_todo(todo.id, todo_update)
             if json_output:
                 print_json(todo)
             else:
@@ -377,19 +524,15 @@ def done(
 
 @app.command()
 def delete(
-    item_id: str = typer.Argument(..., help="Todo ID (UUID)"),
+    item_id: str = typer.Argument(..., help="Todo ID (UUID) or name (supports fuzzy matching)"),
     config_path: Optional[Path] = typer.Option(None, "--config", help="Path to config file"),
 ):
     """Delete a todo item."""
     try:
-        todo_id = UUID(item_id)
-    except ValueError:
-        console.print(f"[red]Error:[/red] Invalid UUID format: {item_id}")
-        sys.exit(1)
-
-    try:
         with get_client(config_path) as client:
-            client.delete_todo(todo_id)
+            # Resolve task identifier (UUID or name with fuzzy matching)
+            todo = _resolve_task_identifier(item_id, client)
+            client.delete_todo(todo.id)
             console.print("[green]✓[/green] Todo deleted successfully!")
     except APIError as e:
         console.print(f"[red]Error:[/red] {e}")
