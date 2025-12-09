@@ -21,6 +21,58 @@ console = Console()
 KNOWN_COMMANDS = {"list", "update", "delete", "get", "add", "edit", "done"}
 
 
+def parse_date(date_str: str) -> datetime:
+    """
+    Parse a date string in various formats and return a datetime object.
+    
+    Supports:
+    - ISO format with time: 2025-01-01T00:00:00, 2025-01-01T12:30:45
+    - ISO format date-only: 2025-01-01
+    - US format: 01/01/2025, 1/1/2025, 01-01-2025
+    - ISO format with Z: 2025-01-01T00:00:00Z
+    
+    If only a date is provided (no time), defaults to midnight (00:00:00).
+    """
+    date_str = date_str.strip()
+    
+    # Try ISO format with time first (handles full ISO and Z suffix)
+    try:
+        return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+    except ValueError:
+        pass
+    
+    # Try ISO format date-only (YYYY-MM-DD)
+    # Check if it looks like ISO format (starts with 4 digits)
+    if len(date_str) == 10 and date_str.count("-") == 2 and date_str[0:4].isdigit():
+        try:
+            return datetime.strptime(date_str, "%Y-%m-%d")
+        except ValueError:
+            pass
+    
+    # Try US format with slash (MM/DD/YYYY)
+    if "/" in date_str:
+        parts = date_str.split("/")
+        if len(parts) == 3:
+            try:
+                return datetime.strptime(date_str, "%m/%d/%Y")
+            except ValueError:
+                pass
+    
+    # Try US format with dash (MM-DD-YYYY)
+    # Only if it doesn't look like ISO format (doesn't start with 4 digits)
+    if "-" in date_str and len(date_str) == 10 and not date_str[0:4].isdigit():
+        try:
+            return datetime.strptime(date_str, "%m-%d-%Y")
+        except ValueError:
+            pass
+    
+    # If all parsing attempts fail, raise an error
+    raise ValueError(
+        f"Invalid date format: {date_str}. "
+        f"Supported formats: YYYY-MM-DD, YYYY-MM-DDTHH:MM:SS, MM/DD/YYYY, MM-DD-YYYY"
+    )
+
+
 def get_client(config_path: Optional[Path] = None) -> APIClient:
     """Get an API client instance."""
     try:
@@ -58,9 +110,9 @@ def _create_todo(
     due_at_dt = None
     if due_at:
         try:
-            due_at_dt = datetime.fromisoformat(due_at.replace("Z", "+00:00"))
-        except ValueError:
-            console.print(f"[red]Error:[/red] Invalid date format. Use ISO format (e.g., 2024-12-31T23:59:59)")
+            due_at_dt = parse_date(due_at)
+        except ValueError as e:
+            console.print(f"[red]Error:[/red] {e}")
             sys.exit(1)
 
     # Build TodoCreate, always include priority (default to 3 if not provided)
@@ -92,7 +144,7 @@ def _create_todo(
 def add(
     title: str = typer.Argument(..., help="Todo title"),
     description: Optional[str] = typer.Option(None, "--description", "-d", help="Description of the todo"),
-    due_at: Optional[str] = typer.Option(None, "--due-at", help="Due date and time (ISO format)"),
+    due_at: Optional[str] = typer.Option(None, "--due-at", help="Due date (supports: YYYY-MM-DD, YYYY-MM-DDTHH:MM:SS, MM/DD/YYYY)"),
     priority: Optional[int] = typer.Option(None, "--priority", "-p", help="Priority (1=highest, 5=lowest, default=3)"),
     tags: Optional[str] = typer.Option(None, "--tags", help="Comma-separated list of tags"),
     estimated_minutes: Optional[int] = typer.Option(None, "--estimated-minutes", "-e", help="Estimated minutes"),
@@ -176,7 +228,7 @@ def update(
     item_id: str = typer.Argument(..., help="Todo ID (UUID)"),
     title: Optional[str] = typer.Option(None, "--title", "-t", help="Title of the todo"),
     description: Optional[str] = typer.Option(None, "--description", "-d", help="Description of the todo"),
-    due_at: Optional[str] = typer.Option(None, "--due-at", help="Due date and time (ISO format)"),
+    due_at: Optional[str] = typer.Option(None, "--due-at", help="Due date (supports: YYYY-MM-DD, YYYY-MM-DDTHH:MM:SS, MM/DD/YYYY)"),
     status: Optional[str] = typer.Option(None, "--status", "-s", help="Status (todo, in_progress, done)"),
     priority: Optional[int] = typer.Option(None, "--priority", "-p", help="Priority (1=highest, 5=lowest)"),
     tags: Optional[str] = typer.Option(None, "--tags", help="Comma-separated list of tags"),
@@ -185,8 +237,6 @@ def update(
     config_path: Optional[Path] = typer.Option(None, "--config", help="Path to config file"),
 ):
     """Update a todo item."""
-    from datetime import datetime
-
     try:
         todo_id = UUID(item_id)
     except ValueError:
@@ -202,9 +252,9 @@ def update(
     due_at_dt = None
     if due_at:
         try:
-            due_at_dt = datetime.fromisoformat(due_at.replace("Z", "+00:00"))
-        except ValueError:
-            console.print(f"[red]Error:[/red] Invalid date format. Use ISO format (e.g., 2024-12-31T23:59:59)")
+            due_at_dt = parse_date(due_at)
+        except ValueError as e:
+            console.print(f"[red]Error:[/red] {e}")
             sys.exit(1)
 
     todo_update = TodoUpdate(
@@ -240,7 +290,7 @@ def edit(
     item_id: str = typer.Argument(..., help="Todo ID (UUID)"),
     title: Optional[str] = typer.Option(None, "--title", "-t", help="Title of the todo"),
     description: Optional[str] = typer.Option(None, "--description", "-d", help="Description of the todo"),
-    due_at: Optional[str] = typer.Option(None, "--due-at", help="Due date and time (ISO format)"),
+    due_at: Optional[str] = typer.Option(None, "--due-at", help="Due date (supports: YYYY-MM-DD, YYYY-MM-DDTHH:MM:SS, MM/DD/YYYY)"),
     status: Optional[str] = typer.Option(None, "--status", "-s", help="Status (todo, in_progress, done)"),
     priority: Optional[int] = typer.Option(None, "--priority", "-p", help="Priority (1=highest, 5=lowest)"),
     tags: Optional[str] = typer.Option(None, "--tags", help="Comma-separated list of tags"),
@@ -249,8 +299,6 @@ def edit(
     config_path: Optional[Path] = typer.Option(None, "--config", help="Path to config file"),
 ):
     """Edit a todo item (alias for update)."""
-    from datetime import datetime
-
     try:
         todo_id = UUID(item_id)
     except ValueError:
@@ -266,9 +314,9 @@ def edit(
     due_at_dt = None
     if due_at:
         try:
-            due_at_dt = datetime.fromisoformat(due_at.replace("Z", "+00:00"))
-        except ValueError:
-            console.print(f"[red]Error:[/red] Invalid date format. Use ISO format (e.g., 2024-12-31T23:59:59)")
+            due_at_dt = parse_date(due_at)
+        except ValueError as e:
+            console.print(f"[red]Error:[/red] {e}")
             sys.exit(1)
 
     todo_update = TodoUpdate(

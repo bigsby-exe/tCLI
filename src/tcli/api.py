@@ -51,7 +51,7 @@ class APIClient:
 
     def create_todo(self, todo: TodoCreate) -> TodoRead:
         """Create a new todo item."""
-        response = self.client.post("/todos/", json=todo.model_dump(exclude_none=True))
+        response = self.client.post("/todos/", json=todo.model_dump(mode='json', exclude_none=True))
         data = self._handle_response(response)
         return TodoRead(**data)
 
@@ -86,7 +86,7 @@ class APIClient:
     def update_todo(self, item_id: UUID, todo: TodoUpdate) -> TodoRead:
         """Update a todo item."""
         response = self.client.patch(
-            f"/todos/{item_id}", json=todo.model_dump(exclude_none=True)
+            f"/todos/{item_id}", json=todo.model_dump(mode='json', exclude_none=True)
         )
         data = self._handle_response(response)
         return TodoRead(**data)
